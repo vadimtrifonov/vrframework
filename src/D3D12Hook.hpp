@@ -63,7 +63,7 @@ public:
         m_on_create_swap_chain = fn;
     }*/
 
-    inline ID3D12Device4* get_device() const { return m_device; }
+    inline ID3D12Device4* get_device() const { return m_device.Get(); }
 
     inline IDXGISwapChain3* get_swap_chain() const { return m_swap_chain; }
 
@@ -93,7 +93,7 @@ public:
     //    D3D12_CPU_DESCRIPTOR_HANDLE* m_last_used_dsv_handle{ nullptr};
 
 protected:
-    ID3D12Device4*      m_device{ nullptr };
+    ComPtr<ID3D12Device4> m_device{ };
     IDXGISwapChain3*    m_swap_chain{ nullptr };
     IDXGISwapChain3*    m_swapchain_0{};
     IDXGISwapChain3*    m_swapchain_1{};

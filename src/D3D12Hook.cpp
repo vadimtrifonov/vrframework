@@ -306,12 +306,6 @@ bool D3D12Hook::hook() {
         spdlog::error("[VR] Failed to create command list for hooking");
     }
 
-    ID3D12GraphicsCommandList5* cmd_list5{};
-    if (FAILED(cmd_list->QueryInterface(IID_PPV_ARGS(&cmd_list5)))) {
-        spdlog::error("[VR] Failed to query ID3D12GraphicsCommandList5 for hooking");
-    }
-
-
     utility::ThreadSuspender suspender{};
 
     try {
@@ -469,7 +463,7 @@ HRESULT WINAPI D3D12Hook::present(IDXGISwapChain3* swap_chain, UINT sync_interva
     d3d12->m_inside_present = true;
     d3d12->m_swap_chain = swap_chain;
 
-    swap_chain->GetDevice(IID_PPV_ARGS(&d3d12->m_device));
+    swap_chain->GetDevice(IID_PPV_ARGS(d3d12->m_device.ReleaseAndGetAddressOf()));
 
     ID3D12CommandQueue * command_queue = nullptr;
 
