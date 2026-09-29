@@ -730,7 +730,7 @@ void D3D12Component::OpenXR::copy(uint32_t swapchain_idx, ID3D12Resource* resour
         spdlog::info("[VR] Attempting to correct...");
 
         for (auto& texture_ctx : ctx.texture_contexts) {
-            texture_ctx->commands.reset();
+            texture_ctx->commands.wait(INFINITE);
         }
 
         texture_index = 0;
