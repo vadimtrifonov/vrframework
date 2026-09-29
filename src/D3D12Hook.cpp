@@ -474,7 +474,7 @@ HRESULT WINAPI D3D12Hook::present(IDXGISwapChain3* swap_chain, UINT sync_interva
             real_swap_chain = *(uintptr_t*)((uintptr_t)swap_chain + d3d12->m_proton_swapchain_offset);
         }
         command_queue = *(ID3D12CommandQueue**)(real_swap_chain + d3d12->m_command_queue_offset);
-        if (command_queue == nullptr || IsBadReadPtr(command_queue, sizeof(void*)) && d3d12->m_using_proton_swapchain) {
+        if (d3d12->m_using_proton_swapchain && (command_queue == nullptr || IsBadReadPtr(command_queue, sizeof(void*)))) {
             //double wrap issue after alt tab for starfield, don't want to recurse, hope one level is suffitient
             real_swap_chain = *(uintptr_t*)((uintptr_t)real_swap_chain + d3d12->m_proton_swapchain_offset);
             command_queue = *(ID3D12CommandQueue**)(real_swap_chain + d3d12->m_command_queue_offset);
