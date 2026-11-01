@@ -60,6 +60,12 @@ void Framework::hook_monitor() {
 
     const auto now = std::chrono::steady_clock::now();
 
+    // A minimized or background game may stop presenting and receiving messages while its hooks are intact.
+    if (m_wnd != nullptr && (IsIconic(m_wnd) || GetForegroundWindow() != m_wnd)) {
+        m_last_present_time = now;
+        m_last_message_time = now;
+    }
+
     auto& d3d11 = get_d3d11_hook();
     auto& d3d12 = get_d3d12_hook();
 
