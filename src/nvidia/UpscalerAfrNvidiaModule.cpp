@@ -5,9 +5,6 @@
 #include <mutex>
 #include <vector>
 
-static std::atomic<bool>     s_dlss_options_reset{true};
-static std::atomic<uint64_t> s_dlss_stable_wh{0}; // high32=width, low32=height
-
 static std::atomic<uint64_t> s_shared_viewports{(uint64_t(1024u + 1u) << 32) | 0u}; // low32=stable, high32=afr
 
 struct CachedViewportPair
@@ -73,7 +70,6 @@ void UpscalerAfrNvidiaModule::on_config_save(utility::Config& cfg)
 
 void UpscalerAfrNvidiaModule::on_device_reset()
 {
-    s_dlss_options_reset = true;
 #ifdef MOTION_VECTOR_REPROJECTION
     m_motion_vector_reprojection.on_device_reset();
 #endif
@@ -357,71 +353,44 @@ sl::Result UpscalerAfrNvidiaModule::on_dlssSetOptions(const sl::ViewportHandle& 
         spdlog::debug("slDLSSSetOptions eOff suppressed for viewport {:x}", (UINT)viewport);
         return sl::Result::eOk;
     }
-    const uint64_t new_wh = (uint64_t(options.outputWidth) << 32) | uint64_t(options.outputHeight);
-    const bool     needs_reset = s_dlss_options_reset.exchange(false);
-    const uint64_t old_wh     = s_dlss_stable_wh.exchange(new_wh);
-    if(!needs_reset && old_wh == new_wh) {
-        return sl::Result::eOk;
-    }
-    spdlog::info("slDLSSSetOptions APPLYING viewport {:x} mode {} output {}x{}", (UINT)viewport, (int)options.mode, options.outputWidth, options.outputHeight);
 
-    // The game reconfigures DLSS to a different output resolution on every flat<->VR transition (menus,
-    // terminals, Star Map). Destroying and recreating DLSS features on those transitions leaks ~2 GB per
-    // open/close cycle until VRAM overcommits, no matter how the free is issued (same-handle sync 27.07-
-    // 02.08.2026, same-handle deferred 25.07.2026, fresh-handle retire+redirect 02.08.2026): sl.dlss's
-    // slFreeResources discards the NVSDK_NGX_D3D12_ReleaseFeature result and reports eOk while the
-    // feature's VRAM is never returned, and sl.common's per-viewport resource clones (idToResourceMap)
-    // are only ever recycled on a re-tag of the same viewport id - slFreeResources never reaches
-    // sl.common, so clones of abandoned viewport ids stay resident until game shutdown. The only scheme
-    // that stays flat (proven by 20 leak-free minutes between transitions in the 02.08 session) is to
-    // never destroy anything: cache one shared viewport pair per (resolution, mode), configure it once,
-    // and just switch the published pair on later transitions.
-    if(old_wh != new_wh && instance->m_free_stale_on_reschange->value()) {
-        uint64_t pair;
-        bool     created = false;
-        {
-            std::scoped_lock lock{s_viewport_cache_mutex};
-            auto it = std::find_if(s_viewport_pair_cache.begin(), s_viewport_pair_cache.end(),
-                                   [&](const CachedViewportPair& e) { return e.wh == new_wh && e.mode == options.mode; });
-            if(it != s_viewport_pair_cache.end()) {
-                pair = it->pair;
-            } else {
-                if(old_wh == 0) {
-                    pair = s_shared_viewports.load(std::memory_order_relaxed);
-                } else {
-                    ++s_viewport_generation;
-                    const uint32_t stable_id = kRotatedViewportBase + s_viewport_generation * 2;
-                    pair = (uint64_t(stable_id + 1) << 32) | uint64_t(stable_id);
-                }
-                s_viewport_pair_cache.push_back({new_wh, options.mode, pair});
-                created = true;
-                if(s_viewport_pair_cache.size() > 8) {
-                    spdlog::warn("DLSS viewport pair cache unusually large ({} entries)", s_viewport_pair_cache.size());
-                }
+    // Flat/VR transitions change the DLSS output size, and the game moves to a new viewport ID each time.
+    // Recreating DLSS features for each new ID kept growing VRAM, so one viewport pair is cached per
+    // (output size, mode) and reused. Options are still forwarded on every call: some, such as preExposure,
+    // change every frame, and DLSS evaluates with the last options it received. Selecting, configuring,
+    // and publishing a pair happen under one lock so both eyes receive the same options.
+    std::scoped_lock lock{s_viewport_cache_mutex};
+    uint64_t         pair = s_shared_viewports.load();
+    if(instance->m_free_stale_on_reschange->value()) {
+        const uint64_t wh = (uint64_t(options.outputWidth) << 32) | uint64_t(options.outputHeight);
+        auto it = std::find_if(s_viewport_pair_cache.begin(), s_viewport_pair_cache.end(),
+                               [&](const CachedViewportPair& e) { return e.wh == wh && e.mode == options.mode; });
+        if(it != s_viewport_pair_cache.end()) {
+            pair = it->pair;
+        } else {
+            if(!s_viewport_pair_cache.empty()) {
+                ++s_viewport_generation;
+                const uint32_t stable_id = kRotatedViewportBase + s_viewport_generation * 2;
+                pair = (uint64_t(stable_id + 1) << 32) | uint64_t(stable_id);
             }
-        }
-        if(created) {
-            if(instance->m_enabled->value()) {
-                original_fn(sl::ViewportHandle{(uint32_t)(pair >> 32)}, options);
-            }
-            const auto stable_result = original_fn(sl::ViewportHandle{(uint32_t)pair}, options);
-            s_shared_viewports.store(pair);
+            s_viewport_pair_cache.push_back({wh, options.mode, pair});
             spdlog::info("Created DLSS shared viewport pair {:x}/{:x} for {}x{} mode {}", (uint32_t)pair, (uint32_t)(pair >> 32), options.outputWidth,
                          options.outputHeight, (int)options.mode);
-            return stable_result;
+            if(s_viewport_pair_cache.size() > 8) {
+                spdlog::warn("DLSS viewport pair cache unusually large ({} entries)", s_viewport_pair_cache.size());
+            }
         }
-        s_shared_viewports.store(pair);
-        spdlog::info("Switched to cached DLSS shared viewport pair {:x}/{:x} for {}x{} mode {} (no reconfigure)", (uint32_t)pair, (uint32_t)(pair >> 32),
-                     options.outputWidth, options.outputHeight, (int)options.mode);
-        return sl::Result::eOk;
     }
 
     if(instance->m_enabled->value()) {
-        sl::ViewportHandle afr_viewport_handle{afr_viewport_id()};
-        original_fn(afr_viewport_handle, options);
+        original_fn(sl::ViewportHandle{(uint32_t)(pair >> 32)}, options);
     }
-    sl::ViewportHandle stable_viewport{stable_viewport_id()};
-    return original_fn(stable_viewport, options);
+    const auto result = original_fn(sl::ViewportHandle{(uint32_t)pair}, options);
+    if(s_shared_viewports.exchange(pair) != pair) {
+        spdlog::info("Switched to DLSS shared viewport pair {:x}/{:x} for viewport {:x} {}x{} mode {}", (uint32_t)pair, (uint32_t)(pair >> 32), (UINT)viewport,
+                     options.outputWidth, options.outputHeight, (int)options.mode);
+    }
+    return result;
 }
 
 sl::Result UpscalerAfrNvidiaModule::on_slFreeResources(sl::Feature feature, const sl::ViewportHandle& viewport)
