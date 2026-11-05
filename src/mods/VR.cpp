@@ -1150,7 +1150,18 @@ void VR::on_draw_ui() {
         return;
     }
 
-    ImGui::Text("Diagonal FOV: %f", get_runtime()->diagonal_fov);
+    const auto frustum = [&] {
+        std::shared_lock _{ get_runtime()->eyes_mtx };
+        return get_runtime()->frustums[0];
+    }();
+    if (frustum[1] > frustum[0] && frustum[2] > frustum[3]) {
+        ImGui::Text("Render FOV (H x V): %.1f x %.1f deg", glm::degrees(std::atan(frustum[1]) - std::atan(frustum[0])), glm::degrees(std::atan(frustum[2]) - std::atan(frustum[3])));
+    } else {
+        ImGui::Text("Render FOV (H x V): not available yet");
+    }
+    if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip("Projection each eye is rendered with, before game zoom and before any crop to the lens.\nNot the headset's visible field of view.");
+    }
     ImGui::TextWrapped("Hardware scheduling: %s", m_has_hw_scheduling ? "Enabled" : "Disabled");
 
 /*    if (m_has_hw_scheduling) {

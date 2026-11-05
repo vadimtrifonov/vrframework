@@ -357,7 +357,6 @@ VRRuntime::Error OpenXR::update_matrices(float nearz, float farz) {
     frustums[1] = get_mat(1, current_pipeline_state);
 
     this->ipd = glm::distance(this->eyes[0][3], this->eyes[1][3]);
-    this->diagonal_fov = glm::degrees(2.0f * std::atan(std::sqrt(frustums[0][0]*frustums[0][0] + frustums[0][2]*frustums[0][2])));
 
     return VRRuntime::Error::SUCCESS;
 }
